@@ -1,0 +1,190 @@
+topic: 실시간 채팅 시스템 설계
+target_level: 미들
+
+documents:
+  - id: D1
+    title: Building Mobile-First Infrastructure for Messenger
+    url: https://engineering.fb.com/2014/10/09/production-engineering/building-mobile-first-infrastructure-for-messenger/
+    tier: 1
+    quotes:
+      - "Since we enqueue a message once to MySQL and then push it to apps and disk in parallel, Messenger receives messages faster and more reliably."
+
+  - id: D2
+    title: Reliability Guide
+    url: https://www.rabbitmq.com/docs/reliability
+    tier: 1
+    quotes:
+      - "Use of acknowledgements guarantees at least once delivery."
+      - "In the event of network failure (or a node failure), messages can be redelivered, and consumers must be prepared to handle deliveries they have seen in the past."
+      - "There is a possibility of message duplication here, because the broker might have sent a confirmation that never reached the producer (due to network failures, etc)."
+      - "Therefore consumer applications will need to perform deduplication or handle incoming messages in an idempotent manner."
+
+  - id: D3
+    title: Consumer Acknowledgements and Publisher Confirms
+    url: https://www.rabbitmq.com/docs/confirms
+    tier: 1
+    quotes:
+      - "`basic.ack` for a persistent message routed to a durable queue will be sent after persisting the message to disk."
+
+  - id: D4
+    title: Quorum Queues
+    url: https://www.rabbitmq.com/docs/quorum-queues
+    tier: 1
+    quotes:
+      - "A quorum queue requires a quorum of the declared nodes to be available to function."
+      - "Generally quorum queues favours data consistency over availability."
+
+  - id: D5
+    title: Real-time Messaging
+    url: https://slack.engineering/real-time-messaging/
+    tier: 1
+    quotes:
+      - "Every CS is mapped to a subset of channels based on consistent hashing."
+      - "With the linear scalability of our current architecture, our projections show that we can serve many more customers."
+
+  - id: D6
+    title: How Discord Scaled Elixir to 5,000,000 Concurrent Users
+    url: https://discord.com/blog/how-discord-scaled-elixir-to-5-000-000-concurrent-users
+    tier: 1
+    quotes:
+      - "However, each publish could be scheduled at a different time, and Discord clients depend on linearizability of events."
+
+  - id: D7
+    title: Apache Kafka 4.0 — Design
+    url: https://kafka.apache.org/40/design/design/
+    tier: 1
+    quotes:
+      - "This buffering is configurable and gives a mechanism to trade off a small amount of additional latency for better throughput."
+      - "The batching can be configured to accumulate no more than a fixed number of messages and to wait no longer than some fixed latency bound (say 64k or 10 ms)."
+
+  - id: D8
+    title: Scaling Slack
+    url: https://www.infoq.com/presentations/slack-scalability/
+    tier: 2
+    quotes:
+      - "It was initially implemented sharded by team, meaning that one point was responsible for your team, and all the events for that team was going to that server. That is a single point of failure. When the server goes down, you cannot connect to Slack."
+      - "We changed from team sharding to topic sharding."
+      - "Events are sent to topics."
+      - "It reduced user-perceived failures. And now, when a server goes down, it means that the list of topics are not available. Very likely, you can still connect to Slack, but you may not be able to access all your channels."
+
+confirmed_nfrs:
+  - id: NFR-1
+    kind: fault_tolerance
+    statement: 서버가 수락한 채팅 메시지를 장애 후에도 보존·재전달하여 누락이나 중복 반영을 방지한다.
+    rationale: >-
+      D3은 영속 메시지의 확인 응답을 디스크 기록 이후에 보낸다고 명시해 수락 완료의 경계를 보여준다.
+      D2는 네트워크·노드 장애 시 메시지가 재전달될 수 있고 소비자가 중복 수신에 대비해야 하며,
+      확인 응답이 유실되면 중복이 발생할 수 있으므로 멱등 처리나 중복 제거가 필요하다고 설명한다.
+      따라서 수락 완료의 경계와 재전달 경로, 중복 억제가 함께 평가 대상이다.
+    target: null
+    qualitative_target: >-
+      수락 완료한 메시지가 장애 후에도 누락되지 않고,
+      복구 과정의 재전달이 사용자에게 중복 메시지로 반영되지 않게 한다.
+    evidence_refs: [D2, D3]
+
+  - id: NFR-2
+    kind: latency
+    statement: 온라인 수신자에게 새 채팅 메시지가 도달하는 경로의 대기를 줄여 실시간 전달 지연을 낮춘다.
+    rationale: >-
+      D1은 메시지를 한 번 큐에 넣은 뒤 앱 전파와 디스크 저장을 병렬로 수행해 수신을 빠르게 했다고 설명한다.
+      D7은 전송 버퍼링이 지연과 처리량을 맞바꾸는 선택이며 대기 상한을 설정할 수 있다고 명시한다.
+      따라서 전달 경로의 직렬 의존성과 전송 대기 정책이 핵심 설계 분기다.
+    target: null
+    qualitative_target: >-
+      온라인 메시지 전달 경로의 직렬 대기와 전송 대기를 줄여 빠르게 전달한다.
+    evidence_refs: [D1, D7]
+
+  - id: NFR-3
+    kind: scalability
+    statement: 사용자와 대화 규모가 커져도 메시지 라우팅 부하를 분산하여 처리 범위를 확장할 수 있어야 한다.
+    rationale: >-
+      D8은 팀 단위 분할에서 한 서버가 그 팀의 모든 이벤트를 담당했고,
+      이벤트를 토픽으로 보내는 분할로 바꾸어 담당 범위를 나눈 구조를 설명한다.
+      D5는 현재 아키텍처의 선형 확장성을 명시한다.
+      D6은 발행별 실행 시점과 클라이언트의 이벤트 순서 요구가 충돌한 사례를 보여주므로,
+      분할 기준과 발행 작업의 조정 범위가 함께 평가 대상이다.
+    target: null
+    qualitative_target: >-
+      라우팅 담당 범위를 분할하여 한 처리 주체에 모든 대화의 전파 부하가 집중되지 않게 하고,
+      규모 증가에 따라 담당 범위를 나눠 처리 용량을 늘린다.
+    evidence_refs: [D5, D6, D8]
+
+tradeoffs:
+  - id: TO-1
+    related_nfr_ids: [NFR-1]
+    description: >-
+      정족수를 요구하는 복제 처리에서는 필요한 노드가 없으면 큐가 동작하지 않는다.
+      데이터 일관성을 우선하는 선택은 장애 중 신규 메시지를 계속 수락할 수 있는지와 충돌한다.
+    evidence_refs: [D4]
+
+  - id: TO-2
+    related_nfr_ids: [NFR-1]
+    description: >-
+      확인 응답 기반 재전달은 유실을 막지만, 확인 응답 자체가 유실되면 같은 메시지가 다시 전달된다.
+      최소 1회 전달을 보장할수록 중복 가능성이 남으므로 수신 측 중복 제거나 멱등 반영이 필요하다.
+    evidence_refs: [D2]
+
+  - id: TO-3
+    related_nfr_ids: [NFR-2]
+    description: >-
+      전송 버퍼에 메시지를 모으면 추가 지연을 대가로 처리량을 높일 수 있다.
+      대기 상한을 줄여 전달을 앞당기는 선택은 일괄 전송의 처리량 이점과 상충한다.
+    evidence_refs: [D7]
+
+  - id: TO-4
+    related_nfr_ids: [NFR-3]
+    description: >-
+      발행 작업을 독립적으로 스케줄링하면 각 발행의 실행 시점이 달라질 수 있지만,
+      클라이언트는 이벤트의 선형화 가능한 순서를 요구할 수 있다.
+      분산 발행의 병렬성과 이벤트 순서 보장 사이의 상충을 평가한다.
+    evidence_refs: [D6]
+
+rubric:
+  criteria:
+    - id: NFR-C1
+      title: 수락한 메시지의 전달 신뢰성
+      description: 서버가 수락 완료한 메시지의 보존·재전달과 중복 억제를 평가한다.
+      related_nfr_ids: [NFR-1]
+      weight: 45
+      competency_axis: FAILURE_RECOVERY
+      levels:
+        - score: 0
+          descriptor: 수락한 메시지를 장애 후 보존하거나 재전달하려는 구조나 설계 고려가 없다.
+        - score: 1
+          descriptor: 메시지 유실·중복을 막아야 한다고 말하지만 보존이나 재전달을 위한 기술·구조 선택은 제시하지 않는다.
+        - score: 2
+          descriptor: "수락 완료의 경계를 정하고, 그 이후 메시지가 누락되거나 중복 반영되지 않게 하는 구조와 작동 이유를 설명한다(예: 영속화 후 수락, 확인 응답 기반 재전달, 수신 측 멱등 반영)."
+        - score: 3
+          descriptor: "2점 요건을 충족하고, 자기 설계에서 메시지가 유실되거나 중복이 걸러지지 않을 수 있는 구간을 식별해 그 구간을 좁히는 선택이 지연이나 처리량과 갖는 상충을 설명한다."
+
+    - id: NFR-C2
+      title: 온라인 메시지 전달 경로의 지연
+      description: 온라인 전달 경로 자체의 직렬 의존성과 전송 대기를 줄이는 설계를 평가한다. 처리 용량 증가는 NFR-C3에서만 채점한다.
+      related_nfr_ids: [NFR-2]
+      weight: 30
+      competency_axis: TRADE_OFF
+      levels:
+        - score: 0
+          descriptor: 온라인 메시지가 전달되기까지의 대기를 줄이는 구조나 설계 고려가 없다.
+        - score: 1
+          descriptor: 실시간으로 빠르게 전달해야 한다고 말하지만 전달 경로에서 대기를 줄이는 기술·구조 선택은 제시하지 않는다.
+        - score: 2
+          descriptor: "온라인 전달 경로에서 특정 대기를 줄이는 구조를 제시하고 그것이 지연을 줄이는 이유를 설명한다(예: 저장과 앱 전달의 병렬화, 전송 버퍼의 대기 상한)."
+        - score: 3
+          descriptor: "2점 요건을 충족하고, 자기 전달 경로에서 대기가 길어지는 조건을 식별해 그 대기를 줄이는 선택이 무엇을 희생하는지 설명한다(예: 일괄 전송의 처리량 이점)."
+
+    - id: NFR-C3
+      title: 메시지 라우팅의 분산 확장성
+      description: 라우팅 담당 범위의 분할과 규모 증가 대응을 평가한다.
+      related_nfr_ids: [NFR-3]
+      weight: 25
+      competency_axis: HIGH_TRAFFIC
+      levels:
+        - score: 0
+          descriptor: 메시지 라우팅 부하를 여러 처리 주체로 분산하려는 구조나 설계 고려가 없다.
+        - score: 1
+          descriptor: 규모가 커지면 서버를 늘려야 한다고 말하지만 라우팅 작업의 분할 기준이나 분산 경로를 제시하지 않는다.
+        - score: 2
+          descriptor: "라우팅 담당 범위의 분할 기준과 처리 주체를 제시하고, 집중되던 전파 부하가 어떻게 분담되는지 설명한다(예: 대화 또는 토픽 기준 분할)."
+        - score: 3
+          descriptor: "2점 요건을 충족하고, 자기 분할 설계에 남는 한계를 하나 이상 식별해 완화책의 상충을 설명한다(예: 발행 병렬성과 이벤트 순서 보장의 상충)."

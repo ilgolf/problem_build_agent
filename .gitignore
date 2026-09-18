@@ -10,3 +10,4 @@ __pycache__/
 .omx/
 .vscode/
 .archgen/
+.claude/settings.local.json
